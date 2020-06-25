@@ -14,3 +14,40 @@ Using Lambda, CloudWatch and SNS.
   - Add Incoming WebHooks integration.
   - Copy the WEbHook URL and save the settings.
   
+3. Create a Lambda Function:
+
+Encryption:
+To encrypt your secrets use the following steps:
+
+  1. Create or use an existing KMS Key - http://docs.aws.amazon.com/kms/latest/developerguide/create-keys.html
+
+  2. Click the "Enable Encryption Helpers" checkbox
+
+  3. Paste <SLACK_CHANNEL> into the slackChannel environment variable
+
+  Note: The Slack channel does not contain private info, so do NOT click encrypt
+
+  4. Paste <SLACK_HOOK_URL> into the kmsEncryptedHookUrl environment variable and click encrypt
+
+  Note: You must exclude the protocol from the URL (e.g. "hooks.slack.com/services/abc123").
+
+  5. Give your function's role permission for the kms:Decrypt action.
+
+     Example:
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Stmt1443036478000",
+            "Effect": "Allow",
+            "Action": [
+                "kms:Decrypt"
+            ],
+            "Resource": [
+                "<your KMS key ARN>"
+            ]
+        }
+    ]
+}
+'''
