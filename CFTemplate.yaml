@@ -14,7 +14,7 @@ Parameters:
     Description: "WebHook API of the Slack Channel. Enter without the https:// protocol. This WebHook will be 
     encrypted using AWS KMS."
     Type: String
-    Default: https://hooks.slack.com/services/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
+    Default: #HookURL
   
   CPUUtilizationThreshold:
     Description: 'CPU Utilization limit to trigger the CloudWatch Alarm'
@@ -48,7 +48,7 @@ Resources:
   LambdaSlackPost:
     Type: AWS::Lambda::Function
     Properties:
-      Code:
+      Code:#use code to post to slack here
          ZipFile: |
           import json
           def lambda_handler(event, context):
@@ -65,7 +65,7 @@ Resources:
         Variables:
           WEBHOOK_URL: !Ref SlackWebHookAPI
           SlackChannelName: !Ref SlackChannelName
-      Role: arn:aws:iam::624724375017:role/service-role/postToSlack-role-bqssiyha
+      Role: #either create a role and use the ARN or use the ARN of an existing role
 
   CPUThresholdBreachAlarm:
     Type: AWS::CloudWatch::Alarm
