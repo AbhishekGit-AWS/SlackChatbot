@@ -1,0 +1,4 @@
+1. Should be able to create all relevant alarms, notifs, etc with minimal intruption. 
+Also, the app code should be installed in the EC2 server and should be ready to use.
+
+This can be followed up with containization, beanstack, etc.
