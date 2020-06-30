@@ -14,7 +14,7 @@ Parameters:
     Description: "WebHook API of the Slack Channel. Enter without the https:// protocol. This WebHook will be 
     encrypted using AWS KMS."
     Type: String
-    Default: #HookURL
+    #Default: #HookURL
   
   CPUUtilizationThreshold:
     Description: 'CPU Utilization limit to trigger the CloudWatch Alarm'
@@ -30,7 +30,80 @@ Parameters:
 
 
 Resources:
-  
+  StressVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      InstanceTenancy: default
+      EnableDnsSupport: true
+      Tags:
+      - Key: Name
+        Value: Stress-App-VPC
+
+  StressSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone:
+        !Select
+        - 0
+        - !GetAZs Ref: AWS::Region
+      VpcId: !Ref StressVPC
+      Tags:
+      - Key: Name
+        Value: Stress-subnet-a
+
+  StressInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties: {}
+
+  StressRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref StressVPC
+
+  StressSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref StressSubnetA
+      RouteTableId: !Ref StressRouteTable
+
+  StressVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref StressVPC
+      InternetGatewayId: !Ref StressInternetGateway
+
+  StressVPCRoute:
+    Type: AWS::EC2::Route
+    DependsOn: StressVPCGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref StressRouteTable
+      GatewayId: !Ref StressInternetGateway
+
+  StressEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ec2 instances to be stressed
+      VpcId: !Ref StressVPC
+
+  StressEC2SGIngressRuleForSSH:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref StressEC2SecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: 0.0.0.0/0
+
+  StressEC2SGEgressRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref StressEC2SecurityGroup
+      IpProtocol: "-1"
+      CidrIp: 0.0.0.0/0
+
   SlackSubscription:
     Type: AWS::SNS::Subscription
     Properties: 
@@ -38,18 +111,51 @@ Resources:
       Protocol: lambda
       TopicArn: !Ref HighCPUTopic
 
-
   HighCPUTopic:
     Type: AWS::SNS::Topic
     Properties:
       DisplayName: HighCPUTopic
       TopicName: HighCPUTopic
 
+  CreateLogsPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: CreateLogsPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+            Resource: '*'
+          - Effect: Allow
+            Action: 
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: '*'
+      Roles:
+        - !GetAtt LambdaExecutionRole.Arn
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Description: 'Role for AWS lambda to execute'
+      RoleName: LambdaExecutionRole
+
   LambdaSlackPost:
     Type: AWS::Lambda::Function
     Properties:
-      Code:#use code to post to slack here
-         ZipFile: |
+      Code:
+        ZipFile: |
           import json
           def lambda_handler(event, context):
               return {
@@ -65,7 +171,7 @@ Resources:
         Variables:
           WEBHOOK_URL: !Ref SlackWebHookAPI
           SlackChannelName: !Ref SlackChannelName
-      Role: #either create a role and use the ARN or use the ARN of an existing role
+      Role: !GetAtt LambdaExecutionRole.Arn
 
   CPUThresholdBreachAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -84,3 +190,4 @@ Resources:
       Dimensions:
         - Name: InstanceId
           Value: !Ref EC2Instance
+
