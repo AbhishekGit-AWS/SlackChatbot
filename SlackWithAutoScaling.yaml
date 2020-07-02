@@ -1,0 +1,460 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation template to launch a php application that can put load on a server resulting in autoscaling."
+
+Parameters:
+
+  PostToSlack:
+    Description: "Do you want the notifications to be posted to slack?"
+    Type: String
+    AllowedValues:
+      - Yes
+      - No
+    Default: No
+
+  SlackChannelName:
+    Description: "Name of the Slack channel where the bot will post"
+    Type: String
+    Default: \#aws-solutions
+    ConstraintDescription : 'must begin with a # and contain only alphanumeric characters.'
+
+  SlackWebHookAPI:
+    Description: "WebHook API of the Slack Channel. Enter without the https:// protocol. This WebHook will be 
+    encrypted using AWS KMS."
+    Type: String
+    #Default: #HookURL
+  
+  # EC2Instance:
+  #   Description: Select the EC2 parameter to watch the CPU Utilization for.
+  #   Type: AWS::EC2::Instance::Id
+
+  KeyPair:
+    Type: AWS::EC2::KeyPair::KeyName
+
+  ImageId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-0447a12f28fddb066
+    Description: 'Default: Amazon Linux 2 AMI (HVM), SSD Volume Type x86'
+  
+  AutoScalingNotificationEmailEndpoint:
+    Type: String
+    Default: 'abhishekLabs@protonmail.com'
+    AllowedPattern: '^([a-zA-Z0-9_\-\.]+)@([a-zA-Z0-9_\-\.]+)\.([a-zA-Z]{2,5})$'
+    ConstraintDescription: 'Please enter a valid e-mail address'
+
+  CPUUtlizationHighThreshold:
+    Type: Number
+    MinValue: 30
+    MaxValue: 100
+    Default: 70
+    Description: 'An instance will be added if the CPU Utilization breaches the threshold.'
+    ConstraintDescription: 'Please select a value between 30 and 100.'
+
+  CPUUtlizationLowThreshold:
+    Type: Number
+    MinValue: 0
+    MaxValue: 20
+    Default: 20
+    Description: 'An instance will be removed if the CPU Utilization breaches the threshold.'
+    ConstraintDescription: 'Please select a value between 0 and 20.'
+
+  MonitoringPeriod:
+    Type: Number
+    Default: 300
+    AllowedValues:
+      - 60
+      - 300
+    Description: '60 seconds for detailed monitoring and 300 secoonds for standard.'
+
+  CPUHighStatistic:
+    Type: String
+    AllowedValues:
+      - Average
+      - Maximum
+    Default: Maximum
+    Description: 'Select wheter to track the CPU Utilization average or maximum for the Period.'
+
+  CPULowStatistic:
+    Type: String
+    AllowedValues:
+      - Average
+      - Minimum
+    Default: Minimum
+    Description: 'Select wheter to track the CPU Utilization average or minimum for the Period.'
+
+Conditions: 
+  PostToSlack: !Equals [ !Ref PostToSlack, Yes ]
+
+Resources:
+  StressVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      InstanceTenancy: default
+      EnableDnsSupport: true
+      Tags:
+      - Key: Name
+        Value: Stress-App-VPC
+  StressSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone:
+        !Select 
+          - 0
+          - Fn::GetAZs: !Ref AWS::Region
+      VpcId: !Ref StressVPC
+      Tags:
+      - Key: Name
+        Value: Stress-subnet-a
+  StressSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone:
+        !Select
+          - 1
+          - Fn::GetAZs: !Ref AWS::Region
+      VpcId: !Ref StressVPC
+      Tags:
+      - Key: Name
+        Value: Stress-subnet-b
+  StressInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties: {}
+  StressDHCPOptions:
+    Type: AWS::EC2::DHCPOptions
+    Properties:
+      DomainName: !Sub '${AWS::Region}.compute.internal'
+      DomainNameServers:
+        - AmazonProvidedDNS
+  StressRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref StressVPC
+  StressVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref StressVPC
+      InternetGatewayId: !Ref StressInternetGateway
+  
+  StressVPCDHCPAssociation:
+    Type: AWS::EC2::VPCDHCPOptionsAssociation
+    Properties:
+      VpcId: !Ref StressVPC
+      DhcpOptionsId: !Ref StressDHCPOptions
+
+  StressVPCRoute:
+    Type: AWS::EC2::Route
+    DependsOn: StressVPCGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref StressRouteTable
+      GatewayId: !Ref StressInternetGateway
+  StressSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref StressSubnetA
+      RouteTableId: !Ref StressRouteTable
+  StressSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref StressSubnetB
+      RouteTableId: !Ref StressRouteTable
+  
+  
+  StressNetworkAcl:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref StressVPC
+  StressNetworkAclEntry:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      CidrBlock: 0.0.0.0/0
+      Egress: true
+      Protocol: -1
+      RuleAction: allow
+      RuleNumber: 100
+      NetworkAclId: !Ref StressNetworkAcl
+  StressNetworkAclEntry2:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      CidrBlock: 0.0.0.0/0
+      Protocol: -1
+      RuleAction: allow
+      RuleNumber: 100
+      NetworkAclId: !Ref StressNetworkAcl
+  StressSubnetNetworkAclAssocationA:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId: !Ref StressNetworkAcl
+      SubnetId: !Ref StressSubnetA
+  StressSubnetNetworkAclAssocationB:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId: !Ref StressNetworkAcl
+      SubnetId: !Ref StressSubnetB
+
+  StressElasticLoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    DependsOn: StressVPCGatewayAttachment
+    Properties:
+      Subnets:
+      - Ref: StressSubnetA
+      - Ref: StressSubnetB
+      CrossZone: true
+      SecurityGroups:
+      - Ref: StressELBSecurityGroup
+      Listeners:
+      - InstancePort: '80'
+        LoadBalancerPort: '80'
+        Protocol: HTTP
+        InstanceProtocol: HTTP
+
+  StressEC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action: "*"
+            Resource: "*"
+  StressInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref StressEC2Role
+
+  StressAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn: StressVPCGatewayAttachment
+    Properties:
+      AvailabilityZones:
+      - !GetAtt StressSubnetA.AvailabilityZone
+      - !GetAtt StressSubnetB.AvailabilityZone
+      Cooldown: '300'
+      DesiredCapacity: '2'
+      HealthCheckGracePeriod: 300
+      HealthCheckType: EC2
+      MaxSize: '4'
+      MinSize: '2'
+      VPCZoneIdentifier:
+      - Ref: StressSubnetA
+      - Ref: StressSubnetB
+      LaunchConfigurationName:
+        Ref: StressLaunchConfiguration
+      LoadBalancerNames:
+      - Ref: StressElasticLoadBalancer
+      TerminationPolicies:
+      - Default
+  StressLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      AssociatePublicIpAddress: true
+      ImageId: !Ref ImageId
+      InstanceType: t2.micro
+      KeyName: !Ref KeyPair
+      IamInstanceProfile: !Ref StressInstanceProfile
+      SecurityGroups:
+        - !Ref StressEC2SecurityGroup
+      BlockDeviceMappings:
+      - DeviceName: "/dev/xvda"
+        Ebs:
+          VolumeSize: 8
+      UserData:
+          !Base64 |
+          #!/bin/sh
+          yum -y install httpd php mysql php-mysql
+          chkconfig httpd on
+          systemctl start httpd
+          systemctl enable httpd
+          cd /tmp
+          wget https://stress-template.s3.ap-south-1.amazonaws.com/phpStressApp.zip
+          unzip phpStressApp.zip
+          mv phpStressApp/* /var/www/html
+
+  StressEC2SGIngressRuleForSSH:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref StressEC2SecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: 0.0.0.0/0
+  StressEC2SGIngressRuleForHTTP:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: StressEC2SecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0
+  StressELBSGIngressRuleForPort80:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: StressELBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0
+  
+  StressEC2SGEgressRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref StressEC2SecurityGroup
+      IpProtocol: "-1"
+      CidrIp: 0.0.0.0/0
+  StressELBSGEgressRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref StressELBSecurityGroup
+      IpProtocol: "-1"
+      CidrIp: 0.0.0.0/0
+  StressEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Stress ec2 instances
+      VpcId: !Ref StressVPC
+      Tags:
+        - Key: name
+          Value: StressEC2SG
+  StressELBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Stress ELB load balancer
+      VpcId: !Ref StressVPC
+
+  StressDecreaseScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: -1
+      AutoScalingGroupName:
+        Ref: StressAutoScalingGroup
+  StressIncreaseScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: 1
+      AutoScalingGroupName:
+        Ref: StressAutoScalingGroup
+  StressCloudWatchScaleUpAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Period: !Ref MonitoringPeriod
+      Statistic: !Ref CPUHighStatistic
+      Threshold: !Ref CPUUtlizationHighThreshold
+      AlarmActions:
+      - Ref: StressIncreaseScalingPolicy
+      Dimensions:
+      - Name: AutoScalingGroupName
+        Value: !Ref StressAutoScalingGroup
+  StressCloudWatchScaleDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      ComparisonOperator: LessThanThreshold
+      EvaluationPeriods: 1
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Period: !Ref MonitoringPeriod
+      Statistic: !Ref CPULowStatistic
+      Threshold: !Ref CPUUtlizationLowThreshold
+      AlarmActions:
+      - Ref: StressDecreaseScalingPolicy
+      Dimensions:
+      - Name: AutoScalingGroupName
+        Value: !Ref StressAutoScalingGroup
+
+  SlackSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: PostToSlack
+    Properties: 
+      Endpoint: !GetAtt LambdaSlackPost.Arn
+      Protocol: lambda
+      TopicArn: !Ref HighCPUTopic
+  HighCPUTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: HighCPUTopic
+      TopicName: HighCPUTopic
+      Subscription:
+        - Endpoint: !Ref AutoScalingNotificationEmailEndpoint
+          Protocol: 'email'
+
+  CreateLogsPolicy:
+    Type: 'AWS::IAM::Policy'
+    Condition: PostToSlack
+    Properties:
+      PolicyName: CreateLogsPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+            Resource: '*'
+          - Effect: Allow
+            Action: 
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: '*'
+      Roles:
+        - !GetAtt LambdaExecutionRole.Arn
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: PostToSlack
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Description: 'Role for AWS lambda to execute'
+      RoleName: LambdaExecutionRole
+  LambdaSlackPost:
+    Type: AWS::Lambda::Function
+    Condition: PostToSlack
+    Properties:
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Hello World!')
+              }
+      FunctionName: LambdaSlackPost
+      Handler: lambda_handler
+      Runtime: python3.7
+      MemorySize: 128
+      Timeout: 10
+      Environment:
+        Variables:
+          WEBHOOK_URL: !Ref SlackWebHookAPI
+          SlackChannelName: !Ref SlackChannelName
+      Role: !GetAtt LambdaExecutionRole.Arn
