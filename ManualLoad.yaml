@@ -19,14 +19,14 @@ Parameters:
   SlackChannelName:
     Description: "Name of the Slack channel where the bot will post"
     Type: String
-    Default: '#aws-solutions'
+    Default: 'YourChannelName'
     ConstraintDescription : 'must begin with a # and contain only alphanumeric characters.'
 
   SlackWebHookAPI:
     Description: "WebHook API of the Slack Channel. Enter without the https:// protocol. This WebHook will be 
     encrypted using AWS KMS."
     Type: String
-    Default: 'https://hooks.slack.com/services/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'
+    Default: 'YourWebHookAPI'
   
   CPUUtlizationHighThreshold:
     Type: Number
